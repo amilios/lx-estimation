@@ -20,54 +20,55 @@ def histogram_prior(belief, grid_spec, mean_0, cov_0):
 # Now let's define the predict function
 
 
+# Now let's define the predict function
+
+
 def histogram_predict(belief, left_encoder_ticks, right_encoder_ticks, grid_spec, robot_spec, cov_mask):
-    belief_in = belief
+        belief_in = belief
 
-    # TODO calculate v and w from ticks using kinematics.
-    #  You will need  some parameters in the `robot_spec` defined above
+        left_dist = (2 * np.pi * robot_spec['wheel_radius'] * left_encoder_ticks) / robot_spec['encoder_resolution']
+        right_dist = (2 * np.pi * robot_spec['wheel_radius'] * right_encoder_ticks) / robot_spec['encoder_resolution']
+ 
+        forward_dist = (right_dist + left_dist) / 2
+        rotation = (right_dist - left_dist) / robot_spec['wheel_baseline']
+        
+        d_t = grid_spec['d'] + forward_dist * np.sin(grid_spec['phi'])
+        phi_t = grid_spec['phi'] + rotation
 
-    # You may find the following code useful to find the current best heading estimate:
-    maxids = np.unravel_index(belief_in.argmax(), belief_in.shape)
-    phi_max = grid_spec['phi_min'] + (maxids[1] + 0.5) * grid_spec['delta_phi']
+        p_belief = np.zeros(belief.shape)
 
-    v = 0.0  # replace this with a function that uses the encoder
-    w = 0.0  # replace this with a function that uses the encoder
+        # Accumulate the mass for each cell as a result of the propagation step
+        for i in range(belief.shape[0]):
+            for j in range(belief.shape[1]):
+                # If belief[i,j] there was no mass to move in the first place
+                if belief[i, j] > 0:
+                    # Now check that the centroid of the cell wasn't propagated out of the allowable range
+                    if (
+                        d_t[i, j] > grid_spec['d_max']
+                        or d_t[i, j] < grid_spec['d_min']
+                        or phi_t[i, j] < grid_spec['phi_min']
+                        or phi_t[i, j] > grid_spec['phi_max']
+                    ):
+                        continue
+                    
+                    i_new = int((d_t[i, j] - grid_spec['d_min']) / grid_spec['delta_d'])
+                    j_new = int((phi_t[i, j] - grid_spec['phi_min']) / grid_spec['delta_phi'])
 
-    # propagate each centroid
-    d_t = grid_spec["d"] + v
-    phi_t = grid_spec["phi"] + w
+                    i_new = np.clip(i_new, 0, belief.shape[0]-1)
+                    j_new = np.clip(j_new, 0, belief.shape[1]-1)
 
-    p_belief = np.zeros(belief.shape)
+                    p_belief[i_new, j_new] += belief[i, j]
 
-    # Accumulate the mass for each cell as a result of the propagation step
-    for i in range(belief.shape[0]):
-        for j in range(belief.shape[1]):
-            # If belief[i,j] there was no mass to move in the first place
-            if belief[i, j] > 0:
-                # Now check that the centroid of the cell wasn't propagated out of the allowable range
-                if (
-                    d_t[i, j] > grid_spec["d_max"]
-                    or d_t[i, j] < grid_spec["d_min"]
-                    or phi_t[i, j] < grid_spec["phi_min"]
-                    or phi_t[i, j] > grid_spec["phi_max"]
-                ):
-                    continue
+        # Finally we are going to add some "noise" according to the process model noise
+        # This is implemented as a Gaussian blur over the histogram
+        s_belief = np.zeros(belief.shape)
+        gaussian_filter(p_belief, cov_mask, output=s_belief, mode="constant")
 
-                # TODO Now find the cell where the new mass should be added
-                i_new = i  # replace with something that accounts for the movement of the robot
-                j_new = j  # replace with something that accounts for the movement of the robot
+        if np.sum(s_belief) == 0:
+            return belief_in
+        belief = s_belief / np.sum(s_belief)
+        return belief
 
-                p_belief[i_new, j_new] += belief[i, j]
-
-    # Finally we are going to add some "noise" according to the process model noise
-    # This is implemented as a Gaussian blur
-    s_belief = np.zeros(belief.shape)
-    gaussian_filter(p_belief, cov_mask, output=s_belief, mode="constant")
-
-    if np.sum(s_belief) == 0:
-        return belief_in
-    belief = s_belief / np.sum(s_belief)
-    return belief
 
 
 # We will start by doing a little bit of processing on the segments to remove anything that is
@@ -130,27 +131,21 @@ def generate_vote(segment, road_spec):
 
 def generate_measurement_likelihood(segments, road_spec, grid_spec):
     # initialize measurement likelihood to all zeros
-    measurement_likelihood = np.zeros(grid_spec["d"].shape)
+    measurement_likelihood = np.zeros(grid_spec['d'].shape)
 
     for segment in segments:
         d_i, phi_i = generate_vote(segment, road_spec)
 
         # if the vote lands outside of the histogram discard it
-        if (
-            d_i > grid_spec["d_max"]
-            or d_i < grid_spec["d_min"]
-            or phi_i < grid_spec["phi_min"]
-            or phi_i > grid_spec["phi_max"]
-        ):
+        if d_i > grid_spec['d_max'] or d_i < grid_spec['d_min'] or phi_i < grid_spec['phi_min'] or phi_i > grid_spec['phi_max']:
             continue
 
-        # So now we have d_i and phi_i which correspond to the estimate of the distance
-        # from the center and the angle relative to the center generated by the single
-        # segment under consideration
-        # TODO find the cell index that corresponds to the measurement d_i, phi_i
-        i = 1  # replace this
-        j = 1  # replace this
+        i = int((d_i - grid_spec['d_min']) / grid_spec['delta_d'])
+        j = int((phi_i - grid_spec['phi_min']) / grid_spec['delta_phi'])
 
+        i = np.clip(i, 0, measurement_likelihood.shape[0]-1)
+        j = np.clip(j, 0, measurement_likelihood.shape[1]-1)
+        
         # Add one vote to that cell
         measurement_likelihood[i, j] += 1
 
@@ -158,6 +153,7 @@ def generate_measurement_likelihood(segments, road_spec, grid_spec):
         return None
     measurement_likelihood /= np.sum(measurement_likelihood)
     return measurement_likelihood
+
 
 
 def histogram_update(belief, segments, road_spec, grid_spec):
@@ -168,13 +164,12 @@ def histogram_update(belief, segments, road_spec, grid_spec):
     measurement_likelihood = generate_measurement_likelihood(segmentsArray, road_spec, grid_spec)
 
     if measurement_likelihood is not None:
-        # TODO: combine the prior belief and the measurement likelihood to get the posterior belief
-        # Don't forget that you may need to normalize to ensure that the output is valid
-        # probability distribution
+        posterior = measurement_likelihood * belief
+        
+        if np.sum(posterior) > 0:
+            belief = posterior / np.sum(posterior)
+    return (measurement_likelihood, belief)
 
-        # replace this with something that combines the belief and the measurement_likelihood
-        belief = measurement_likelihood
-    return measurement_likelihood, belief
 
 def getSegmentDistance(segment):
     x_c = (segment.points[0].x + segment.points[1].x) / 2
