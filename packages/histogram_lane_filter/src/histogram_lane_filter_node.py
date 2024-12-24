@@ -135,6 +135,9 @@ class HistogramLaneFilterNode(DTROS):
         self.camera_info_received = True
 
     def cbProcessLeftEncoder(self, left_encoder_msg):
+        msg_delay = (rospy.Time.now() - left_encoder_msg.header.stamp).to_sec()
+        self.loginfo(f"Left encoder message delay: {msg_delay:.2f} seconds")
+        
         if not self.filter.initialized:
             self.filter.encoder_resolution = left_encoder_msg.resolution
             self.filter.initialized = True
@@ -149,39 +152,64 @@ class HistogramLaneFilterNode(DTROS):
         self.last_encoder_stamp = right_encoder_msg.header.stamp
 
     def cbPredict(self, event):
-        # first let's check if we moved at all, if not abort
         if self.right_encoder_ticks_delta == 0 and self.left_encoder_ticks_delta == 0:
             return
 
+        predict_start = rospy.Time.now()
         self.filter.predict(self.left_encoder_ticks_delta, self.right_encoder_ticks_delta)
+        predict_time = (rospy.Time.now() - predict_start).to_sec()
+        self.loginfo(f"Prediction step took: {predict_time:.2f} seconds")
+        
         self.left_encoder_ticks += self.left_encoder_ticks_delta
         self.right_encoder_ticks += self.right_encoder_ticks_delta
         self.left_encoder_ticks_delta = 0
         self.right_encoder_ticks_delta = 0
 
     def cbImage(self, img_msg):
-        """Callback to process the segments
-
-        Args:
-            segment_list_msg (:obj:`SegmentList`): message containing list of processed segments
-
-        """
-        # Decode from compressed image with OpenCV
+        """Callback to process the segments"""
         if not self.camera_info_received:
             return
 
+        if (rospy.Time.now() - img_msg.header.stamp).to_sec() > 1.0:
+            self.loginfo("Dropping old image frame")
+            return
 
+        # Log incoming image timing
+        current_time = rospy.Time.now()
+        image_delay = (current_time - img_msg.header.stamp).to_sec()
+        self.loginfo(f"Image processing delay: {image_delay:.2f} seconds")
+
+        # Time the image processing steps
+        process_start = current_time
         try:
             image = self.bridge.compressed_imgmsg_to_cv2(img_msg)
         except ValueError as e:
             self.logerr(f"Could not decode image: {e}")
             return
-        cropped_image = image[self.filter.crop_top :, : , :]
-        lines = self.filter.detect_lines(cropped_image)
-        segments = self.filter.lines_to_projected_segments(lines)
 
-        # update
+        cropped_image = image[self.filter.crop_top :, : , :]
+        
+        # Time line detection
+        detect_start = rospy.Time.now()
+        lines = self.filter.detect_lines(cropped_image)
+        detect_time = (rospy.Time.now() - detect_start).to_sec()
+        self.loginfo(f"Line detection took: {detect_time:.2f} seconds")
+
+        # Time projection
+        project_start = rospy.Time.now()
+        segments = self.filter.lines_to_projected_segments(lines)
+        project_time = (rospy.Time.now() - project_start).to_sec()
+        self.loginfo(f"Segment projection took: {project_time:.2f} seconds")
+
+        # Time filter update
+        update_start = rospy.Time.now()
         self.filter.update(segments)
+        update_time = (rospy.Time.now() - update_start).to_sec()
+        self.loginfo(f"Filter update took: {update_time:.2f} seconds")
+
+        # Total processing time
+        total_time = (rospy.Time.now() - process_start).to_sec()
+        self.loginfo(f"Total processing time: {total_time:.2f} seconds")
 
         # publish
         self.publishEstimate(img_msg.header.stamp)

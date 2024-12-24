@@ -19,55 +19,51 @@ def histogram_prior(belief, grid_spec, mean_0, cov_0):
 
 # Now let's define the predict function
 
-
-# Now let's define the predict function
-
-
 def histogram_predict(belief, left_encoder_ticks, right_encoder_ticks, grid_spec, robot_spec, cov_mask):
-        belief_in = belief
+    belief_in = belief
 
-        left_dist = (2 * np.pi * robot_spec['wheel_radius'] * left_encoder_ticks) / robot_spec['encoder_resolution']
-        right_dist = (2 * np.pi * robot_spec['wheel_radius'] * right_encoder_ticks) / robot_spec['encoder_resolution']
- 
-        forward_dist = (right_dist + left_dist) / 2
-        rotation = (right_dist - left_dist) / robot_spec['wheel_baseline']
-        
-        d_t = grid_spec['d'] + forward_dist * np.sin(grid_spec['phi'])
-        phi_t = grid_spec['phi'] + rotation
+    left_dist = (2 * np.pi * robot_spec['wheel_radius'] * left_encoder_ticks) / robot_spec['encoder_resolution']
+    right_dist = (2 * np.pi * robot_spec['wheel_radius'] * right_encoder_ticks) / robot_spec['encoder_resolution']
 
-        p_belief = np.zeros(belief.shape)
+    forward_dist = (right_dist + left_dist) / 2
+    rotation = (right_dist - left_dist) / robot_spec['wheel_baseline']
+    
+    d_t = grid_spec['d'] + forward_dist * np.sin(grid_spec['phi'])
+    phi_t = grid_spec['phi'] + rotation
 
-        # Accumulate the mass for each cell as a result of the propagation step
-        for i in range(belief.shape[0]):
-            for j in range(belief.shape[1]):
-                # If belief[i,j] there was no mass to move in the first place
-                if belief[i, j] > 0:
-                    # Now check that the centroid of the cell wasn't propagated out of the allowable range
-                    if (
-                        d_t[i, j] > grid_spec['d_max']
-                        or d_t[i, j] < grid_spec['d_min']
-                        or phi_t[i, j] < grid_spec['phi_min']
-                        or phi_t[i, j] > grid_spec['phi_max']
-                    ):
-                        continue
-                    
-                    i_new = int((d_t[i, j] - grid_spec['d_min']) / grid_spec['delta_d'])
-                    j_new = int((phi_t[i, j] - grid_spec['phi_min']) / grid_spec['delta_phi'])
+    p_belief = np.zeros(belief.shape)
 
-                    i_new = np.clip(i_new, 0, belief.shape[0]-1)
-                    j_new = np.clip(j_new, 0, belief.shape[1]-1)
+    # Accumulate the mass for each cell as a result of the propagation step
+    for i in range(belief.shape[0]):
+        for j in range(belief.shape[1]):
+            # If belief[i,j] there was no mass to move in the first place
+            if belief[i, j] > 0:
+                # Now check that the centroid of the cell wasn't propagated out of the allowable range
+                if (
+                    d_t[i, j] > grid_spec['d_max']
+                    or d_t[i, j] < grid_spec['d_min']
+                    or phi_t[i, j] < grid_spec['phi_min']
+                    or phi_t[i, j] > grid_spec['phi_max']
+                ):
+                    continue
+                
+                i_new = int((d_t[i, j] - grid_spec['d_min']) / grid_spec['delta_d'])
+                j_new = int((phi_t[i, j] - grid_spec['phi_min']) / grid_spec['delta_phi'])
 
-                    p_belief[i_new, j_new] += belief[i, j]
+                i_new = np.clip(i_new, 0, belief.shape[0]-1)
+                j_new = np.clip(j_new, 0, belief.shape[1]-1)
 
-        # Finally we are going to add some "noise" according to the process model noise
-        # This is implemented as a Gaussian blur over the histogram
-        s_belief = np.zeros(belief.shape)
-        gaussian_filter(p_belief, cov_mask, output=s_belief, mode="constant")
+                p_belief[i_new, j_new] += belief[i, j]
 
-        if np.sum(s_belief) == 0:
-            return belief_in
-        belief = s_belief / np.sum(s_belief)
-        return belief
+    # Finally we are going to add some "noise" according to the process model noise
+    # This is implemented as a Gaussian blur over the histogram
+    s_belief = np.zeros(belief.shape)
+    gaussian_filter(p_belief, cov_mask, output=s_belief, mode="constant")
+
+    if np.sum(s_belief) == 0:
+        return belief_in
+    belief = s_belief / np.sum(s_belief)
+    return belief
 
 
 
